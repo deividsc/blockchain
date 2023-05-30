@@ -1,24 +1,33 @@
-# Module 1 - Create a Blockchain
+
+
+# Module 2 - Create a Cryptocurrency
 
 import datetime
 import hashlib
 import json
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
+import requests
+from uuid import uuid4
+from urllib.parse import urlparse
 
 
 class Blockchain:
 
     def __init__(self):
         self.chain = []
+        self.transactions = []
         self.create_block(proof=1, previous_hash='0')
+        self.nodes = set()
 
     def create_block(self, proof, previous_hash):
         block = {
             'index': len(self.chain) + 1,
             'timestamp': str(datetime.datetime.now()),
             'proof': proof,
-            'previous_hash': previous_hash
+            'previous_hash': previous_hash,
+            'transactions': self.transactions
         }
+        self.transactions = []
         self.chain.append(block)
         return block
 
@@ -59,7 +68,43 @@ class Blockchain:
             block_index += 1
 
         return True
+    
+    def add_transactions(self, sender, receiver, amount):
+        self.transactions.append({
+            'sender': sender,
+            'receiver': receiver,
+            'amount': amount
+            })
+        
+        previous_block = self.get_previous_block()
+        
+        return previous_block['index'] + 1
+    
+    def add_node(self, address):
+        parsed_url = urlparse(address)
+        self.nodes.add(parsed_url.netloc)
+        
+    def replace_chain(self):
+        network = self.nodes
+        longest_chain = None
+        max_length = len(self.chain)
+        for node in network:
+            response = requests.get(f'http://{node}/get_chain')
+            if response.status_code == 200:
+                length = response.json()['length'] 
+                chain = response.json()['chain'] 
+                if length > max_length and self.is_chain_valid(chain):
+                    max_length = length
+                    longest_chain = chain
+                    
+        if longest_chain:
+            self.chain = longest_chain
+            return True
+        
+        return False
 
+# Creating and address for the node on Port 8000
+node_address = str(uuid4()).replace('-', '')
 
 # Creating a Web App
 app = Flask(__name__)
@@ -74,13 +119,16 @@ def mine_block():
     previous_proof = previous_block['proof']
     proof = blockchain.proof_of_work(previous_proof)
     previous_hash = blockchain.hash(previous_block)
+    blockchain.add_transactions(sender = node_address, receiver = 'David', amount = 1)
+    
     block = blockchain.create_block(proof, previous_hash)
     response = {
         'message': 'Congratulations, you just mined a block',
         'index': block['index'],
         'timestamp': block['timestamp'],
         'proof': block['proof'],
-        'previous_hash': block['previous_hash']
+        'previous_hash': block['previous_hash'],
+        'transactions': block['transactions']
     }
     
     return jsonify(response), 200
@@ -108,6 +156,37 @@ def is_valid():
             }
         
     return jsonify(response), 200
+
+# Adding a new transaction to the Blockchain
+@app.route('/add_transaction', methods=['POST'])
+def add_transaction():
+    json = request.get_json()
+    transactions_keys = ['sender', 'receiver', 'amount']
+    if not all (key in json for key in transactions_keys):
+        return 'Some elements of the transaction are missing', 400
+    
+    index = blockchain.add_transactions(json['sender'], json['receiver'], json['amount'])
+    response = {'message': f'This transaction will be added to Block {index}'}
+    
+    return jsonify(response), 201
+
+# Decentralizing our Blockchain
+
+@app.route('/connect_node', methods=['POST'])
+def connect_node():
+    json = request.get_json()
+    nodes = json.get('nodes')
+    if nodes is None:
+        return "No node", 400
+    for node in nodes:
+        blockchain.add_node(node)
+    
+    response = {
+        'message': "All the nodes are now connected. The Miscoin Blockchain now contains the follow nodes",
+        'total_nodes': len(blockchain.nodes)
+            }
+    
+    return jsonify(response), 201
 
 # Running the app
 app.run(host= '0.0.0.0', port = 8000)
